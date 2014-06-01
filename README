@@ -1,0 +1,6 @@
+yet another OpenCL N-Body simulation.
+because there weren't enough out there in the world.
+
+some day i'll bump up the integrator accuracy
+and some day i'll fix up the initial conditions to match a galaxy velocity curve or mass distribution or something.
+
