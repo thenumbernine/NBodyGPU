@@ -22,6 +22,7 @@ struct NBodyApp : public ::CLApp::CLApp {
 	GLuint postTex;		//post-processing texture
 	GLuint lastTex;		//last texture
 	GLuint gradientTex;	//gradient texture
+	GLuint particleTex;	//particle texture
 	GLuint fbo;
 
 	cl::Memory posMem;
@@ -33,6 +34,7 @@ struct NBodyApp : public ::CLApp::CLApp {
 	cl::Kernel copyToGLKernel;
 	cl::Kernel initDataKernel;
 
+	std::shared_ptr<Shader::Program> particleShader;
 	std::shared_ptr<Shader::Program> postShader;
 
 	int count;
@@ -64,6 +66,7 @@ NBodyApp::NBodyApp()
 , postTex(0)
 , lastTex(0)
 , gradientTex(0)
+, particleTex(0)
 , fbo(0)
 , count(COUNT)
 , screenBufferSize(1024, 1024)
@@ -133,16 +136,43 @@ void NBodyApp::init() {
 
 	glGenTextures(1, &postTex);
 	glBindTexture(GL_TEXTURE_2D, postTex);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F_ARB, screenBufferSize(0), screenBufferSize(1), 0, GL_RGBA, GL_FLOAT, NULL);
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	//glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F_ARB, screenBufferSize(0), screenBufferSize(1), 0, GL_RGBA, GL_FLOAT, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenBufferSize(0), screenBufferSize(1), 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	
 	glGenTextures(1, &lastTex);
 	glBindTexture(GL_TEXTURE_2D, lastTex);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F_ARB, screenBufferSize(0), screenBufferSize(1), 0, GL_RGBA, GL_FLOAT, NULL);
-	
+
+	glGenTextures(1, &particleTex);
+	glBindTexture(GL_TEXTURE_2D, particleTex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);//GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	Vector<int,2> particleTexSize(256, 256);
+	std::vector<char> particleData(particleTexSize(0) * particleTexSize(1) * 4);
+	{
+		char *p = &particleData[0];
+		for (int y = 0; y < particleTexSize(1); ++y) {
+			for (int x = 0; x < particleTexSize(0); ++x) {
+				float dx = (float)(x + .5f) / (float)particleTexSize(0) - .5f;
+				float dy = (float)(y + .5f) / (float)particleTexSize(1) - .5f;
+				float dr2 = dx*dx + dy*dy;
+				float lum = exp(-100.f * dr2);
+				*p++ = (char)(255.f * std::min(.5f, lum));
+				*p++ = (char)(255.f * std::min(.5f, lum));
+				*p++ = (char)(255.f * std::min(1.f, lum));
+				*p++ = 255;//(char)(255.f * lum);
+			}
+		}
+	}
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, particleTexSize(0), particleTexSize(1), 0, GL_RGBA, GL_UNSIGNED_BYTE, &particleData[0]);
+	//glGenerateMipmap(GL_TEXTURE_2D);
+
 	glGenTextures(1, &gradientTex);
 	glBindTexture(GL_TEXTURE_2D, gradientTex);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -156,12 +186,18 @@ void NBodyApp::init() {
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+	particleShader = std::make_shared<Shader::Program>();
+	particleShader->attachVertexShader("particle.shader", "#define VERTEX_SHADER\n");
+	particleShader->attachFragmentShader("particle.shader", "#define FRAGMENT_SHADER\n");
+	particleShader->link();
+	particleShader->setUniform<int>("tex", 0);
+
 	postShader = std::make_shared<Shader::Program>();
 	postShader->attachVertexShader("post.shader", "#define VERTEX_SHADER\n");
 	postShader->attachFragmentShader("post.shader", "#define FRAGMENT_SHADER\n");
 	postShader->link();
-	std::cout << "shader handle " << postShader->getHandle() << std::endl;
 	postShader->setUniform<int>("tex", 0);
+	postShader->setUniform<float>("dx", 1. / (float)screenBufferSize(0), 1. / (float)screenBufferSize(1));
 	Shader::Program::useNone();
 	
 	int err = glGetError();
@@ -173,6 +209,7 @@ void NBodyApp::shutdown() {
 	glDeleteTextures(1, &postTex);
 	glDeleteTextures(1, &lastTex);
 	glDeleteTextures(1, &gradientTex);
+	glDeleteTextures(1, &particleTex);
 	glDeleteBuffers(1, &positionVBO);
 }
 
@@ -219,14 +256,38 @@ PROFILE_BEGIN_FRAME()
 	glTranslatef(0,0,-dist);
 	Quat angleAxis = viewAngle.toAngleAxis();
 	glRotatef(angleAxis(3) * 180. / M_PI, angleAxis(0), angleAxis(1), angleAxis(2));
+
+	glPointSize(20.f);
+	glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, Vector<float,3>(0.f, 1.f, 0.f).v);
+	glPointParameterf(GL_POINT_SIZE_MIN, 1.f);
+	glPointParameterf(GL_POINT_SIZE_MAX, 128.f);
+
+	glEnable(GL_POINT_SMOOTH);
+	glEnable(GL_BLEND);
+	glBindTexture(GL_TEXTURE_2D, particleTex);
+	glEnable(GL_POINT_SPRITE);
+	glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);
+	glTexEnvi(GL_POINT_SPRITE, GL_COORD_REPLACE, GL_TRUE);
 	
+	particleShader->use();
 	glBindBuffer(GL_ARRAY_BUFFER, positionVBO);
 	glVertexPointer(4, GL_FLOAT, 0, 0);
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glDrawArrays(GL_POINTS, 0, count);
 	glDisableClientState(GL_VERTEX_ARRAY);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	Shader::Program::useNone();
+	
+	glDisable(GL_BLEND);
+	glDisable(GL_VERTEX_PROGRAM_POINT_SIZE);
+	glDisable(GL_POINT_SPRITE);
 
+	glBindTexture(GL_TEXTURE_2D, postTex);//lastTex);
+	glGenerateMipmap(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, 0);
+#if 0	//disabled - using point sprites for blurring
 	//post-processing
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, lastTex, 0);
 	status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -248,6 +309,7 @@ PROFILE_BEGIN_FRAME()
 	glEnd();
 	glBindTexture(GL_TEXTURE_2D, 0);
 	Shader::Program::useNone();
+#endif
 
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -261,13 +323,27 @@ PROFILE_BEGIN_FRAME()
 	glLoadIdentity();
 	
 	glEnable(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, lastTex);
+	glBindTexture(GL_TEXTURE_2D, postTex);//lastTex);
+	glGenerateMipmap(GL_TEXTURE_2D);
+#if 0
+	//first layer...
 	glBegin(GL_QUADS);
 	glTexCoord2f(0,0);	glVertex2f(0,0);
 	glTexCoord2f(1,0);	glVertex2f(1,0);
 	glTexCoord2f(1,1);	glVertex2f(1,1);
 	glTexCoord2f(0,1);	glVertex2f(0,1);
 	glEnd();
+#endif
+	//2nd layer... isn't blurring like it should be ...
+	glTexEnvf(GL_TEXTURE_FILTER_CONTROL, GL_TEXTURE_LOD_BIAS, -1000.f);
+	glBegin(GL_QUADS);
+	glTexCoord2f(0,0);	glVertex2f(0,0);
+	glTexCoord2f(1,0);	glVertex2f(1,0);
+	glTexCoord2f(1,1);	glVertex2f(1,1);
+	glTexCoord2f(0,1);	glVertex2f(0,1);
+	glEnd();
+	glTexEnvf(GL_TEXTURE_FILTER_CONTROL, GL_TEXTURE_LOD_BIAS, 0.f);
+
 	glDisable(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, 0);
 

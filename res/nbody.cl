@@ -16,7 +16,7 @@ const float kgPerSm = 1.9891e30;						//kilograms per solar mass
 const float gravityConstantInLyr3PerSmGyr2 = gravityConstantInM3PerKgS2 * lyrPerM * lyrPerM * lyrPerM * sPerGyr * sPerGyr * kgPerSm;
 */
 #define GRAVITY_CONSTANT	7903.8725760201f			//in case the above is beyond the precision of the compiler 
-#define DT	1.f										//in galactic years
+#define DT	.1f										//in galactic years
 #define EPS	1e+8f										//in light years
 
 real3 gravity(real3 posA, real3 posB) {
@@ -40,7 +40,7 @@ __kernel void initData(
 #define CRAND()		(FRAND() * 2. - 1.)
 #define M_PI		3.1415926535898
 #define TOTAL_MASS		10000000
-	obj->mass = pow(10., FRAND() * 4.);
+	obj->mass = mix(100., 10000., FRAND());//pow(10., FRAND() * 4.);
 	float density = .5 * sqrt(-log(1 - FRAND()));
 	float cbrtMm = cbrt(TOTAL_MASS / FRAND());
 	float a = 100. * INITIAL_RADIUS / sqrt(sqrt(2.) - 1.);
@@ -105,5 +105,6 @@ __kernel void copyToGL(
 	__global float4 *dst = dsts + i;
 	__global const Object *srcObj = srcObjs + i;
 	dst->xyz = srcObj->pos.xyz / INITIAL_RADIUS;
-	dst->w = 1.;
+	dst->w = srcObj->mass;
 }
+
