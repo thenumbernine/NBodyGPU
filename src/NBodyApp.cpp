@@ -33,7 +33,7 @@ struct NBodyApp : public ::CLApp::CLApp {
 	cl::Kernel copyToGLKernel;
 	cl::Kernel initDataKernel;
 
-	std::shared_ptr<Shader::Program> particleShader;
+	Shader::Program particleShader;
 
 	int count;
 
@@ -174,13 +174,15 @@ void NBodyApp::init() {
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-	particleShader = std::make_shared<Shader::Program>();
-	particleShader->attachVertexShader("particle.shader", "#define VERTEX_SHADER\n");
-	particleShader->attachFragmentShader("particle.shader", "#define FRAGMENT_SHADER\n");
-	particleShader->link();
-	particleShader->setUniform<int>("tex", 0);
-
-	Shader::Program::useNone();
+	std::string particleShaderSource = Common::File::read("particle.shader");
+	std::vector<Shader::Shader> shaders = {
+		Shader::VertexShader(std::vector<std::string>{"#define VERTEX_SHADER\n", particleShaderSource}),
+		Shader::FragmentShader(std::vector<std::string>{"#define FRAGMENT_SHADER\n", particleShaderSource}),
+	};
+	particleShader = Shader::Program(shaders)
+		.link()
+		.setUniform<int>("tex", 0)
+		.done();
 	
 	int err = glGetError();
 	if (err) throw Common::Exception() << "GL error " << err;
@@ -252,14 +254,14 @@ PROFILE_BEGIN_FRAME()
 	glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);
 	glTexEnvi(GL_POINT_SPRITE, GL_COORD_REPLACE, GL_TRUE);
 	
-	particleShader->use();
+	particleShader.use();
 	glBindBuffer(GL_ARRAY_BUFFER, positionVBO);
 	glVertexPointer(4, GL_FLOAT, 0, 0);
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glDrawArrays(GL_POINTS, 0, count);
 	glDisableClientState(GL_VERTEX_ARRAY);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
-	Shader::Program::useNone();
+	particleShader.done();
 	
 	glDisable(GL_BLEND);
 	glDisable(GL_VERTEX_PROGRAM_POINT_SIZE);
