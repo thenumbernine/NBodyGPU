@@ -4,8 +4,10 @@
 #include "Common/Macros.h"
 #include "Common/File.h"
 #include "Common/Exception.h"
+#include "Shader/Program.h"
 #include <OpenCL/cl.hpp>
 #include <OpenGL/gl.h>
+#include <OpenGL/glext.h>
 #include <vector>
 #include <string>
 #include <fstream>
@@ -16,20 +18,30 @@
 struct NBodyApp : public ::CLApp::CLApp {
 	typedef ::CLApp::CLApp Super;
 	
-	GLuint posVBO;
-	cl::Memory posMem;
+	GLuint positionVBO;	//position vertex buffer object -- for rendering
+	GLuint postTex;		//post-processing texture
+	GLuint lastTex;		//last texture
+	GLuint gradientTex;	//gradient texture
+	GLuint fbo;
 
+	cl::Memory posMem;
+	
 	cl::Buffer objsMem;	//current contents
 	cl::Buffer objsMemPrev;	//previous contents
 	cl::Program program;
 	cl::Kernel updateKernel;
 	cl::Kernel copyToGLKernel;
+	cl::Kernel initDataKernel;
+
+	std::shared_ptr<Shader::Program> postShader;
 
 	int count;
 
 	cl::NDRange globalSize;
 	cl::NDRange localSize;
-	
+
+	Vector<int,2> screenBufferSize;
+	Vector<int,2> viewportSize;
 	Quat viewAngle;
 	float dist;
 	bool leftShiftDown;
@@ -38,7 +50,9 @@ struct NBodyApp : public ::CLApp::CLApp {
 	bool rightButtonDown;
 
 	NBodyApp();
+
 	virtual void init();
+	virtual void shutdown();
 	virtual void update();
 	virtual void resize(int width, int height);
 	virtual void sdlEvent(SDL_Event &event);
@@ -46,8 +60,13 @@ struct NBodyApp : public ::CLApp::CLApp {
 
 NBodyApp::NBodyApp()
 : Super()
-, posVBO(0)
-, count(8192)
+, positionVBO(0)
+, postTex(0)
+, lastTex(0)
+, gradientTex(0)
+, fbo(0)
+, count(COUNT)
+, screenBufferSize(1024, 1024)
 , dist(1.f)
 , leftShiftDown(false)
 , rightShiftDown(false)
@@ -70,32 +89,16 @@ void NBodyApp::init() {
 	globalSize = cl::NDRange(count);
 	localSize = cl::NDRange(localSizeValue);
 
-	glGenBuffers(1, &posVBO);
-	glBindBuffer(GL_ARRAY_BUFFER, posVBO);	
+	glGenBuffers(1, &positionVBO);
+	glBindBuffer(GL_ARRAY_BUFFER, positionVBO);	
 	glBufferData(GL_ARRAY_BUFFER, sizeof(cl_float4) * count, 0, GL_DYNAMIC_DRAW);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);	
 	
-	posMem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, posVBO);
+	posMem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, positionVBO);
 
 	objsMem = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(Object) * count);
 	objsMemPrev = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(Object) * count);
-
-	/*
-	radial density profile: rho(r) = 3(v(r))^2 / (4 pi G r^2)	<- by Kepler's 3rd law
-	*/
-	std::vector<Object> objs(count);
-	for (Object &obj : objs) {
-		obj.pos.s[0] = crand();
-		obj.pos.s[1] = crand();
-		obj.pos.s[2] = crand();
-		obj.vel.s[0] = crand();
-		obj.vel.s[1] = crand();
-		obj.vel.s[2] = crand();
-		obj.mass = exp(frand() * 3.);
-	}
-	commands.enqueueWriteBuffer(objsMem, CL_TRUE, 0, sizeof(Object) * count, &objs[0]);
-	commands.enqueueWriteBuffer(objsMemPrev, CL_TRUE, 0, sizeof(Object) * count, &objs[0]);
-
+	
 	try {
 		std::string source = Common::File::read("nbody.cl");
 		std::vector<std::pair<const char *, size_t>> sources = {
@@ -109,12 +112,68 @@ void NBodyApp::init() {
 		throw;
 	}
 
+	std::vector<float> randBuffer(count);
+	for (float &f : randBuffer) { f = frand(); };
+	cl::Buffer randMem = cl::Buffer(context, CL_MEM_READ_ONLY, sizeof(float) * count);
+	commands.enqueueWriteBuffer(randMem, CL_TRUE, 0, sizeof(float) * count, &randBuffer[0]);	
+	
+	initDataKernel = cl::Kernel(program, "initData");
+	initDataKernel.setArg(0, objsMem);
+	initDataKernel.setArg(1, randMem);
+	initDataKernel.setArg(2, count);
+	commands.enqueueNDRangeKernel(initDataKernel, cl::NDRange(0), globalSize, localSize);
+	commands.finish();
+	
 	updateKernel = cl::Kernel(program, "update");
 	updateKernel.setArg(2, count);
 
 	copyToGLKernel = cl::Kernel(program, "copyToGL");
 	copyToGLKernel.setArg(0, posMem);
 	copyToGLKernel.setArg(2, count);
+
+	glGenTextures(1, &postTex);
+	glBindTexture(GL_TEXTURE_2D, postTex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F_ARB, screenBufferSize(0), screenBufferSize(1), 0, GL_RGBA, GL_FLOAT, NULL);
+	
+	glGenTextures(1, &lastTex);
+	glBindTexture(GL_TEXTURE_2D, lastTex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F_ARB, screenBufferSize(0), screenBufferSize(1), 0, GL_RGBA, GL_FLOAT, NULL);
+	
+	glGenTextures(1, &gradientTex);
+	glBindTexture(GL_TEXTURE_2D, gradientTex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	int gradientSize = 1024;
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, gradientSize, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+	glGenFramebuffers(1, &fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+	postShader = std::make_shared<Shader::Program>();
+	postShader->attachVertexShader("post.shader", "#define VERTEX_SHADER\n");
+	postShader->attachFragmentShader("post.shader", "#define FRAGMENT_SHADER\n");
+	postShader->link();
+	std::cout << "shader handle " << postShader->getHandle() << std::endl;
+	postShader->setUniform<int>("tex", 0);
+	Shader::Program::useNone();
+	
+	int err = glGetError();
+	if (err) throw Common::Exception() << "GL error " << err;
+}
+
+void NBodyApp::shutdown() {
+	glDeleteFramebuffers(1, &fbo);
+	glDeleteTextures(1, &postTex);
+	glDeleteTextures(1, &lastTex);
+	glDeleteTextures(1, &gradientTex);
+	glDeleteBuffers(1, &positionVBO);
 }
 
 void NBodyApp::update() {
@@ -137,33 +196,88 @@ PROFILE_BEGIN_FRAME()
 	commands.enqueueNDRangeKernel(updateKernel, cl::NDRange(0), globalSize, localSize);
 	std::swap<cl::Memory>(objsMem, objsMemPrev);
 
+	//render to framebuffer
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, postTex, 0);
+	int status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (status != GL_FRAMEBUFFER_COMPLETE) throw Common::Exception() << "check framebuffer status " << status;
+	
 	//render GL
+	glViewport(0, 0, screenBufferSize(0), screenBufferSize(1));
 	glClear(GL_COLOR_BUFFER_BIT);
+	
+	const float zNear = .01;
+	const float zFar = 10;
+	float aspectRatio = (float)viewportSize(0) / (float)viewportSize(1);
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glFrustum(-aspectRatio * zNear, aspectRatio * zNear, -zNear, zNear, zNear, zFar);
+
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	glTranslatef(0,0,-dist);
 	Quat angleAxis = viewAngle.toAngleAxis();
 	glRotatef(angleAxis(3) * 180. / M_PI, angleAxis(0), angleAxis(1), angleAxis(2));
 	
-
-	glBindBuffer(GL_ARRAY_BUFFER, posVBO);
+	glBindBuffer(GL_ARRAY_BUFFER, positionVBO);
 	glVertexPointer(4, GL_FLOAT, 0, 0);
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glDrawArrays(GL_POINTS, 0, count);
 	glDisableClientState(GL_VERTEX_ARRAY);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
+	//post-processing
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, lastTex, 0);
+	status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (status != GL_FRAMEBUFFER_COMPLETE) throw Common::Exception() << "check framebuffer status " << status;
+
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0,1,0,1,-1,1);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+
+	postShader->use();
+	glBindTexture(GL_TEXTURE_2D, postTex);
+	glBegin(GL_QUADS);
+	glTexCoord2f(0,0);	glVertex2f(0,0);
+	glTexCoord2f(1,0);	glVertex2f(1,0);
+	glTexCoord2f(1,1);	glVertex2f(1,1);
+	glTexCoord2f(0,1);	glVertex2f(0,1);
+	glEnd();
+	glBindTexture(GL_TEXTURE_2D, 0);
+	Shader::Program::useNone();
+
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+	//render to screen
+	glViewport(0, 0, viewportSize(0), viewportSize(1));
+	glClear(GL_COLOR_BUFFER_BIT);
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0, 1, 0, 1, -1, 1);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	
+	glEnable(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, lastTex);
+	glBegin(GL_QUADS);
+	glTexCoord2f(0,0);	glVertex2f(0,0);
+	glTexCoord2f(1,0);	glVertex2f(1,0);
+	glTexCoord2f(1,1);	glVertex2f(1,1);
+	glTexCoord2f(0,1);	glVertex2f(0,1);
+	glEnd();
+	glDisable(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, 0);
+
 PROFILE_END_FRAME()
 }
 
 void NBodyApp::resize(int width, int height) {
 	Super::resize(width, height);
-	const float zNear = .01;
-	const float zFar = 10;
-	float aspectRatio = (float)width / (float)height;
-	glMatrixMode(GL_PROJECTION);
-	glLoadIdentity();
-	glFrustum(-aspectRatio * zNear, aspectRatio * zNear, -zNear, zNear, zNear, zFar);
+	viewportSize(0) = width;
+	viewportSize(1) = height;
 }
 	
 void NBodyApp::sdlEvent(SDL_Event &event) {
