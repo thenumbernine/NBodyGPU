@@ -1,5 +1,5 @@
 #include "CLApp/CLApp.h"
-#include "TensorMath/Vector.h"
+#include "Tensor/Vector.h"
 #include "Profiler/Profiler.h"
 #include "Common/Macros.h"
 #include "Common/File.h"
@@ -40,8 +40,8 @@ struct NBodyApp : public ::CLApp::CLApp {
 	cl::NDRange globalSize;
 	cl::NDRange localSize;
 
-	Vector<int,2> screenBufferSize;
-	Vector<int,2> viewportSize;
+	Tensor::Vector<int,2> screenBufferSize;
+	Tensor::Vector<int,2> viewportSize;
 	Quat viewAngle;
 	float dist;
 	bool leftShiftDown;
@@ -141,7 +141,7 @@ void NBodyApp::init() {
 	glBindTexture(GL_TEXTURE_2D, particleTex);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	Vector<int,2> particleTexSize(256, 256);
+	Tensor::Vector<int,2> particleTexSize(256, 256);
 	std::vector<char> particleData(particleTexSize(0) * particleTexSize(1) * 4);
 	{
 		char *p = &particleData[0];
@@ -243,7 +243,7 @@ PROFILE_BEGIN_FRAME()
 	glPointSize(20.f);
 	glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, Vector<float,3>(0.f, 1.f, 0.f).v);
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, Tensor::Vector<float,3>(0.f, 1.f, 0.f).v);
 	glPointParameterf(GL_POINT_SIZE_MIN, 1.f);
 	glPointParameterf(GL_POINT_SIZE_MAX, 128.f);
 

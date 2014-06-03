@@ -8,7 +8,7 @@ void main() {
 	vec4 vertex = vec4(gl_Vertex.xyz, 1.);
 	vec4 eyeVertex = gl_ModelViewMatrix * vertex;
 	distSq = dot(eyeVertex.xyz, eyeVertex.xyz);
-	gl_Position = gl_ModelViewProjectionMatrix * eyeVertex;
+	gl_Position = gl_ProjectionMatrix * eyeVertex;
 	gl_PointSize = spriteWidth / gl_Position.w;
 }
 #endif	//VERTEX_SHADER
