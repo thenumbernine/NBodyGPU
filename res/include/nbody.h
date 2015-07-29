@@ -2,7 +2,7 @@
 
 //radius of the milky way, in light years
 #define INITIAL_RADIUS	50000
-#define COUNT			8192
+#define COUNT			256
 
 typedef float real;
 #ifdef __OPENCL_VERSION__

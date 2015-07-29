@@ -1,4 +1,5 @@
-#include "CLApp/CLApp.h"
+#include "CLCommon/CLCommon.h"
+#include "GLApp/GLApp.h"
 #include "Tensor/Vector.h"
 #include "Profiler/Profiler.h"
 #include "Common/Macros.h"
@@ -15,9 +16,11 @@
 #include "nbody.h"
 #include "Quat.h"
 
-struct NBodyApp : public ::CLApp::CLApp {
-	typedef ::CLApp::CLApp Super;
-	
+struct NBodyApp : public ::GLApp::GLApp {
+	typedef ::GLApp::GLApp Super;
+
+	std::shared_ptr<CLCommon::CLCommon> clCommon;
+
 	GLuint positionVBO;	//position vertex buffer object -- for rendering
 	GLuint postTex;		//post-processing texture
 	GLuint gradientTex;	//gradient texture
@@ -77,8 +80,10 @@ NBodyApp::NBodyApp()
 void NBodyApp::init() {
 	Super::init();
 
-	size_t maxWorkGroupSize = device.getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
-	std::vector<size_t> maxWorkItemSizes = device.getInfo<CL_DEVICE_MAX_WORK_ITEM_SIZES>();
+	clCommon = std::make_shared<CLCommon::CLCommon>(true);
+
+	size_t maxWorkGroupSize = clCommon->device.getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
+	std::vector<size_t> maxWorkItemSizes = clCommon->device.getInfo<CL_DEVICE_MAX_WORK_ITEM_SIZES>();
 
 	std::cout << "max work group size " << maxWorkGroupSize << std::endl;
 	std::cout << "max work item sizes";
@@ -94,35 +99,35 @@ void NBodyApp::init() {
 	glBufferData(GL_ARRAY_BUFFER, sizeof(cl_float4) * count, 0, GL_DYNAMIC_DRAW);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);	
 	
-	posMem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, positionVBO);
+	posMem = cl::BufferGL(clCommon->context, CL_MEM_WRITE_ONLY, positionVBO);
 
-	objsMem = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(Object) * count);
-	objsMemPrev = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(Object) * count);
+	objsMem = cl::Buffer(clCommon->context, CL_MEM_READ_WRITE, sizeof(Object) * count);
+	objsMemPrev = cl::Buffer(clCommon->context, CL_MEM_READ_WRITE, sizeof(Object) * count);
 	
 	try {
 		std::string source = Common::File::read("nbody.cl");
 		std::vector<std::pair<const char *, size_t>> sources = {
 			std::pair<const char *, size_t>(source.c_str(), source.length())
 		};
-		program = cl::Program(context, sources);
-		program.build({device}, "-I include");
+		program = cl::Program(clCommon->context, sources);
+		program.build({clCommon->device}, "-I include");
 	} catch (cl::Error &err) {
 		std::cout << "failed to build program executable!" << std::endl;
-		std::cout << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(device) << std::endl;
+		std::cout << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(clCommon->device) << std::endl;
 		throw;
 	}
 
 	std::vector<float> randBuffer(count);
 	for (float &f : randBuffer) { f = frand(); };
-	cl::Buffer randMem = cl::Buffer(context, CL_MEM_READ_ONLY, sizeof(float) * count);
-	commands.enqueueWriteBuffer(randMem, CL_TRUE, 0, sizeof(float) * count, &randBuffer[0]);	
+	cl::Buffer randMem = cl::Buffer(clCommon->context, CL_MEM_READ_ONLY, sizeof(float) * count);
+	clCommon->commands.enqueueWriteBuffer(randMem, CL_TRUE, 0, sizeof(float) * count, &randBuffer[0]);	
 	
 	initDataKernel = cl::Kernel(program, "initData");
 	initDataKernel.setArg(0, objsMem);
 	initDataKernel.setArg(1, randMem);
 	initDataKernel.setArg(2, count);
-	commands.enqueueNDRangeKernel(initDataKernel, cl::NDRange(0), globalSize, localSize);
-	commands.finish();
+	clCommon->commands.enqueueNDRangeKernel(initDataKernel, cl::NDRange(0), globalSize, localSize);
+	clCommon->commands.finish();
 	
 	updateKernel = cl::Kernel(program, "update");
 	updateKernel.setArg(2, count);
@@ -170,9 +175,11 @@ void NBodyApp::init() {
 
 	glBindTexture(GL_TEXTURE_2D, 0);
 
+#if 0
 	glGenFramebuffers(1, &fbo);
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+#endif
 
 	std::string particleShaderSource = Common::File::read("particle.shader");
 	std::vector<Shader::Shader> shaders = {
@@ -189,7 +196,9 @@ void NBodyApp::init() {
 }
 
 void NBodyApp::shutdown() {
+#if 0
 	glDeleteFramebuffers(1, &fbo);
+#endif
 	glDeleteTextures(1, &postTex);
 	glDeleteTextures(1, &gradientTex);
 	glDeleteTextures(1, &particleTex);
@@ -201,30 +210,32 @@ PROFILE_BEGIN_FRAME()
 	glFinish();
 
 	std::vector<cl::Memory> glObjects = {posMem};
-	commands.enqueueAcquireGLObjects(&glObjects);
+	clCommon->commands.enqueueAcquireGLObjects(&glObjects);
 
 	//copy CL to GL
 	copyToGLKernel.setArg(1, objsMem);
-	commands.enqueueNDRangeKernel(copyToGLKernel, cl::NDRange(0), globalSize, localSize);
+	clCommon->commands.enqueueNDRangeKernel(copyToGLKernel, cl::NDRange(0), globalSize, localSize);
 	
-	commands.enqueueReleaseGLObjects(&glObjects);
-	commands.finish();
+	clCommon->commands.enqueueReleaseGLObjects(&glObjects);
+	clCommon->commands.finish();
 
 	//update CL state
 	updateKernel.setArg(0, objsMemPrev);	//write new state over old state
 	updateKernel.setArg(1, objsMem);
-	commands.enqueueNDRangeKernel(updateKernel, cl::NDRange(0), globalSize, localSize);
+	clCommon->commands.enqueueNDRangeKernel(updateKernel, cl::NDRange(0), globalSize, localSize);
 	std::swap<cl::Memory>(objsMem, objsMemPrev);
 
+#if 0
 	//render to framebuffer
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 	
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, postTex, 0);
 	int status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if (status != GL_FRAMEBUFFER_COMPLETE) throw Common::Exception() << "check framebuffer status " << status;
-	
+
 	//render GL
 	glViewport(0, 0, screenBufferSize(0), screenBufferSize(1));
+#endif
 	glClear(GL_COLOR_BUFFER_BIT);
 	
 	const float zNear = .01;
@@ -270,7 +281,7 @@ PROFILE_BEGIN_FRAME()
 	glBindTexture(GL_TEXTURE_2D, postTex);
 	glGenerateMipmap(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, 0);
-	
+#if 0
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 	//render to screen
@@ -306,7 +317,7 @@ PROFILE_BEGIN_FRAME()
 
 	glDisable(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, 0);
-
+#endif
 PROFILE_END_FRAME()
 }
 
