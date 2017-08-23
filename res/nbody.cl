@@ -29,17 +29,16 @@ r^2 (1 - (M/m)^2/3) = -a^2
 r^2 = a^2 / ((M/m)^2/3 - 1)
 r = a / ((M/m)^2/3 - 1)^1/2
 */
-__kernel void initData(
-	__global Object *objs,
-	__global float *randBuffer,
-	int count)
+kernel void initData(
+	global Object *objs,
+	global float *randBuffer)
 {
 	int i = get_global_id(0);
-	if (i >= count) return;
-	__global Object *obj = objs + i;
+	if (i >= COUNT) return;
+	global Object *obj = objs + i;
 	
 	int j = i;
-#define FRAND()		(randBuffer[j=(j+104729)%count])
+#define FRAND()		(randBuffer[j=(j+104729)%COUNT])
 #define CRAND()		(FRAND() * 2. - 1.)
 #ifndef M_PI
 #define M_PI		3.1415926535898f
@@ -88,21 +87,20 @@ w = sqrt(G M / r^3)
 |v| = r w = sqrt(G M / r)
 */
 
-__kernel void update(
-	__global Object *newObjs,
-	__global const Object *oldObjs,
-	int count)
+kernel void update(
+	global Object *newObjs,
+	global const Object *oldObjs)
 {
 	int i = get_global_id(0);
-	if (i >= count) return;
+	if (i >= COUNT) return;
 
-	__global Object *newObj = newObjs + i;
+	global Object *newObj = newObjs + i;
 	*newObj = oldObjs[i];
 
 	newObj->pos += newObj->vel * DT;
 	
-	__global const Object *oldObj = oldObjs;
-	for (int j = 0; j < count; ++j, ++oldObj) {
+	global const Object *oldObj = oldObjs;
+	for (int j = 0; j < COUNT; ++j, ++oldObj) {
 		real3 dx = newObj->pos - oldObj->pos;
 		real invLen = rsqrt(dot(dx,dx) + EPS);
 		real invLen3 = invLen * invLen * invLen;
@@ -111,17 +109,15 @@ __kernel void update(
 	}
 }
 
-__kernel void copyToGL(
-	__global float4 *dsts,
-	__global const Object *srcObjs,
-	int count)
+kernel void copyToGL(
+	global float4 *dsts,
+	global const Object *srcObjs)
 {
 	int i = get_global_id(0);
-	if (i >= count) return;
+	if (i >= COUNT) return;
 
-	__global float4 *dst = dsts + i;
-	__global const Object *srcObj = srcObjs + i;
+	global float4 *dst = dsts + i;
+	global const Object *srcObj = srcObjs + i;
 	dst->xyz = srcObj->pos.xyz / INITIAL_RADIUS;
 	dst->w = srcObj->mass;
 }
-

@@ -16,6 +16,7 @@
 #include "nbody.h"
 #include "Quat.h"
 
+//stupid windows
 #ifndef min
 #define min std::min
 #endif
@@ -24,6 +25,8 @@ struct NBodyApp : public ::GLApp::GLApp {
 	typedef ::GLApp::GLApp Super;
 
 	std::shared_ptr<CLCommon::CLCommon> clCommon;
+	
+	bool hasGLSharing, hasFP64;
 
 	GLuint positionVBO;	//position vertex buffer object -- for rendering
 	GLuint postTex;		//post-processing texture
@@ -31,7 +34,10 @@ struct NBodyApp : public ::GLApp::GLApp {
 	GLuint particleTex;	//particle texture
 	GLuint fbo;
 
+	//with GL sharing
 	cl::Memory posMem;
+	//without GL sharing
+	std::vector<real4> posCPUMem;
 	
 	cl::Buffer objsMem;	//current contents
 	cl::Buffer objsMemPrev;	//previous contents
@@ -67,12 +73,14 @@ struct NBodyApp : public ::GLApp::GLApp {
 
 NBodyApp::NBodyApp()
 : Super()
+, hasGLSharing(false)
+, hasFP64(false)
 , positionVBO(0)
 , postTex(0)
 , gradientTex(0)
 , particleTex(0)
 , fbo(0)
-, count(COUNT)
+, count(256)
 , screenBufferSize(1024, 1024)
 , dist(1.f)
 , leftShiftDown(false)
@@ -81,10 +89,49 @@ NBodyApp::NBodyApp()
 , rightButtonDown(false)
 {}
 
+//TODO put this in CLCommon, where a similar function operating on vectors exists
+static auto checkHasGLSharing = [](const cl::Device& device)-> bool {
+	std::vector<std::string> extensions = CLCommon::getExtensions(device);
+	return std::find(extensions.begin(), extensions.end(), "cl_khr_gl_sharing") != extensions.end()
+		|| std::find(extensions.begin(), extensions.end(), "cl_APPLE_gl_sharing") != extensions.end();
+};
+
+static auto checkHasFP64 = [](const cl::Device& device)-> bool {
+	std::vector<std::string> extensions = CLCommon::getExtensions(device);
+	return std::find(extensions.begin(), extensions.end(), "cl_khr_fp64") != extensions.end();
+};
+
 void NBodyApp::init() {
 	Super::init();
 
-	clCommon = std::make_shared<CLCommon::CLCommon>(true);
+	clCommon = std::make_shared<CLCommon::CLCommon>(
+		/*useGPU=*/true,	
+		/*verbose=*/true,	
+		/*pickDevice=*/[&](const std::vector<cl::Device>& devices_) -> std::vector<cl::Device>::const_iterator {
+			
+			//sort with a preference to sharing
+			std::vector<cl::Device> devices = devices_;
+			std::sort(
+				devices.begin(),
+				devices.end(),
+				[&](const cl::Device& a, const cl::Device& b) -> bool {
+					return (checkHasGLSharing(a) + checkHasFP64(a)) 
+						> (checkHasGLSharing(b) + checkHasFP64(b));
+				});
+
+			cl::Device best = devices[0];
+			//return std::find<std::vector<cl::Device>::const_iterator, cl::Device>(devices_.begin(), devices_.end(), best);
+			for (std::vector<cl::Device>::const_iterator iter = devices_.begin(); iter != devices_.end(); ++iter) {
+				if ((*iter)() == best()) return iter;
+			}
+			throw Common::Exception() << "couldn't find a device";
+		});
+	
+	hasGLSharing = checkHasGLSharing(clCommon->device);
+std::cout << "hasGLSharing " << hasGLSharing << std::endl; 
+	hasFP64 = checkHasFP64(clCommon->device);
+std::cout << "hasFP64 " << hasFP64 << std::endl;
+
 
 	size_t maxWorkGroupSize = clCommon->device.getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
 	std::vector<size_t> maxWorkItemSizes = clCommon->device.getInfo<CL_DEVICE_MAX_WORK_ITEM_SIZES>();
@@ -102,18 +149,34 @@ void NBodyApp::init() {
 	glBindBuffer(GL_ARRAY_BUFFER, positionVBO);	
 	glBufferData(GL_ARRAY_BUFFER, sizeof(cl_float4) * count, 0, GL_DYNAMIC_DRAW);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);	
-	
-	posMem = cl::BufferGL(clCommon->context, CL_MEM_WRITE_ONLY, positionVBO);
+
+	if (hasGLSharing) {
+		posMem = cl::BufferGL(clCommon->context, CL_MEM_WRITE_ONLY, positionVBO);
+	} else {
+		posCPUMem.resize(count);
+	}
 
 	objsMem = cl::Buffer(clCommon->context, CL_MEM_READ_WRITE, sizeof(Object) * count);
 	objsMemPrev = cl::Buffer(clCommon->context, CL_MEM_READ_WRITE, sizeof(Object) * count);
 	
 	try {
-		std::string source = Common::File::read("nbody.cl");
+		std::stringstream ss;
+		ss	
+			<< (hasGLSharing ? "#pragma OPENCL EXTENSION cl_khr_gl_sharing : enable\n" : "")
+			<< (hasFP64 ? "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n" : "")
+			<< "#define USE_GL_SHARING " << (hasGLSharing ? "1" : "0") << "\n"
+			<< "#define COUNT " << count << "\n"
+			<< "#define INITIAL_RADIUS 50000\n"	//radius of the milky way, in light years
+			<< "#include \"nbody.cl\"\n";
+		std::string source = ss.str();
+#if defined(CL_HPP_TARGET_OPENCL_VERSION) && CL_HPP_TARGET_OPENCL_VERSION>=200
+		program = cl::Program(clCommon->context, std::vector<std::string>{source});
+#else
 		std::vector<std::pair<const char *, size_t>> sources = {
 			std::pair<const char *, size_t>(source.c_str(), source.length())
 		};
 		program = cl::Program(clCommon->context, sources);
+#endif	//CL_HPP_TARGET_OPENCL_VERSION
 		program.build({clCommon->device}, "-I include");
 	} catch (cl::Error &err) {
 		std::cout << "failed to build program executable!" << std::endl;
@@ -129,16 +192,15 @@ void NBodyApp::init() {
 	initDataKernel = cl::Kernel(program, "initData");
 	initDataKernel.setArg(0, objsMem);
 	initDataKernel.setArg(1, randMem);
-	initDataKernel.setArg(2, count);
 	clCommon->commands.enqueueNDRangeKernel(initDataKernel, cl::NDRange(0), globalSize, localSize);
 	clCommon->commands.finish();
 	
 	updateKernel = cl::Kernel(program, "update");
-	updateKernel.setArg(2, count);
 
 	copyToGLKernel = cl::Kernel(program, "copyToGL");
-	copyToGLKernel.setArg(0, posMem);
-	copyToGLKernel.setArg(2, count);
+	if (hasGLSharing) {
+		copyToGLKernel.setArg(0, posMem);
+	}
 
 	glGenTextures(1, &postTex);
 	glBindTexture(GL_TEXTURE_2D, postTex);
@@ -191,7 +253,6 @@ void NBodyApp::init() {
 		Shader::FragmentShader(std::vector<std::string>{"#define FRAGMENT_SHADER\n", particleShaderSource}),
 	};
 	particleShader = Shader::Program(shaders)
-		.link()
 		.setUniform<int>("tex", 0)
 		.done();
 	
@@ -211,28 +272,45 @@ void NBodyApp::shutdown() {
 
 void NBodyApp::update() {
 PROFILE_BEGIN_FRAME()
-	glFinish();
-
-	std::vector<cl::Memory> glObjects = {posMem};
-	clCommon->commands.enqueueAcquireGLObjects(&glObjects);
-
-	//copy CL to GL
 	copyToGLKernel.setArg(1, objsMem);
-	clCommon->commands.enqueueNDRangeKernel(copyToGLKernel, cl::NDRange(0), globalSize, localSize);
-	
-	clCommon->commands.enqueueReleaseGLObjects(&glObjects);
-	clCommon->commands.finish();
+	if (hasGLSharing) {
+		glFinish();
+
+		std::vector<cl::Memory> glObjects = {posMem};
+		clCommon->commands.enqueueAcquireGLObjects(&glObjects);
+
+		//copy CL to GL
+		clCommon->commands.enqueueNDRangeKernel(copyToGLKernel, cl::NDRange(0), globalSize, localSize);
+		
+		clCommon->commands.enqueueReleaseGLObjects(&glObjects);
+		clCommon->commands.finish();
+	} else {
+		copyToGLKernel.setArg(0, objsMemPrev);	//use prev as a temp buffer for packing data
+		clCommon->commands.enqueueNDRangeKernel(copyToGLKernel, cl::NDRange(0), globalSize, localSize);
+		
+		clCommon->commands.enqueueReadBuffer(objsMemPrev, GL_TRUE, 0, sizeof(Object) * count, posCPUMem.data());
+		clCommon->commands.finish();
+
+		//now upload to the VBO
+		glBindBuffer(GL_ARRAY_BUFFER, positionVBO);
+		glBufferSubData(GL_ARRAY_BUFFER_ARB, 0, sizeof(cl_float4) * count, posCPUMem.data());
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glFinish();
+	}
 
 	//update CL state
+//WHY IS THIS CRASHING?
 	updateKernel.setArg(0, objsMemPrev);	//write new state over old state
 	updateKernel.setArg(1, objsMem);
 	clCommon->commands.enqueueNDRangeKernel(updateKernel, cl::NDRange(0), globalSize, localSize);
-	//std::swap<cl::Memory>(objsMem, objsMemPrev);
-	{
+	
+	std::swap<cl::Memory>(objsMem, objsMemPrev);
+	/*{
 		cl::Buffer tmp = objsMem;
 		objsMem = objsMemPrev;
 		objsMemPrev = tmp;
-	}
+	}*/
+
 #if 0
 	//render to framebuffer
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -396,4 +474,3 @@ void NBodyApp::sdlEvent(SDL_Event &event) {
 }
 
 GLAPP_MAIN(NBodyApp)
-
