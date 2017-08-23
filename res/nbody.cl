@@ -41,7 +41,9 @@ __kernel void initData(
 	int j = i;
 #define FRAND()		(randBuffer[j=(j+104729)%count])
 #define CRAND()		(FRAND() * 2. - 1.)
+#ifndef M_PI
 #define M_PI		3.1415926535898f
+#endif
 #define AVERAGE_MASS	2171.2552622753f	//average mass = .5 * (10^4 - 10^0) / log(10)
 #define TOTAL_MASS		(COUNT * AVERAGE_MASS)
 	obj->mass = mix(100.f, 10000.f, FRAND());//pow(10., FRAND() * 4.);
@@ -67,7 +69,7 @@ __kernel void initData(
 		float phi = 2.f * M_PI * FRAND();
 		float theta = acos(2.f * FRAND() - 1.f);
 		float3 dir = (float3)(cos(phi) * sin(theta), sin(phi) * sin(theta), cos(theta));
-		obj->vel = dir * velocity * INITIAL_RADIUS * 5.;
+		obj->vel = dir * (velocity * INITIAL_RADIUS * 5.f);
 	}
 #undef FRAND
 }

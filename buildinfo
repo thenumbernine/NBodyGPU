@@ -1,0 +1,11 @@
+distName='NBody'
+distType='app'
+depends:append{
+	'../Common',
+	'../GLApp',
+	'../CLCommon',
+	'../Tensor',
+	'../Profiler',
+	'../Shader',
+}
+include:insert'res/include'

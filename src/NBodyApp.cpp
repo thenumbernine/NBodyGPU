@@ -6,15 +6,19 @@
 #include "Common/File.h"
 #include "Common/Exception.h"
 #include "Shader/Program.h"
-#include <OpenCL/cl.hpp>
-#include <OpenGL/gl.h>
-#include <OpenGL/glext.h>
+#include "CLCommon/cl.hpp"
+#include "Common/gl.h"
 #include <vector>
 #include <string>
 #include <fstream>
 #include <iostream>
+#include <algorithm>
 #include "nbody.h"
 #include "Quat.h"
+
+#ifndef min
+#define min std::min
+#endif
 
 struct NBodyApp : public ::GLApp::GLApp {
 	typedef ::GLApp::GLApp Super;
@@ -90,7 +94,7 @@ void NBodyApp::init() {
 	for (size_t size : maxWorkItemSizes) { std::cout << " " << size; }
 	std::cout << std::endl;
 
-	size_t localSizeValue = 16;//std::min<size_t>(maxWorkItemSizes[0], count);
+	size_t localSizeValue = 16;//min(maxWorkItemSizes[0], count);
 	globalSize = cl::NDRange(count);
 	localSize = cl::NDRange(localSizeValue);
 
@@ -156,9 +160,9 @@ void NBodyApp::init() {
 				float dy = (float)(y + .5f) / (float)particleTexSize(1) - .5f;
 				float dr2 = dx*dx + dy*dy;
 				float lum = exp(-100.f * dr2);
-				*p++ = (char)(255.f * std::min(.5f, lum));
-				*p++ = (char)(255.f * std::min(.5f, lum));
-				*p++ = (char)(255.f * std::min(1.f, lum));
+				*p++ = (char)(255.f * min(.5f, lum));
+				*p++ = (char)(255.f * min(.5f, lum));
+				*p++ = (char)(255.f * min(1.f, lum));
 				*p++ = 255;//(char)(255.f * lum);
 			}
 		}
@@ -223,8 +227,12 @@ PROFILE_BEGIN_FRAME()
 	updateKernel.setArg(0, objsMemPrev);	//write new state over old state
 	updateKernel.setArg(1, objsMem);
 	clCommon->commands.enqueueNDRangeKernel(updateKernel, cl::NDRange(0), globalSize, localSize);
-	std::swap<cl::Memory>(objsMem, objsMemPrev);
-
+	//std::swap<cl::Memory>(objsMem, objsMemPrev);
+	{
+		cl::Buffer tmp = objsMem;
+		objsMem = objsMemPrev;
+		objsMemPrev = tmp;
+	}
 #if 0
 	//render to framebuffer
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
