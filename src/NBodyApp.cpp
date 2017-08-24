@@ -80,7 +80,7 @@ NBodyApp::NBodyApp()
 , gradientTex(0)
 , particleTex(0)
 , fbo(0)
-, count(256)
+, count(16384)
 , screenBufferSize(1024, 1024)
 , dist(1.f)
 , leftShiftDown(false)
@@ -159,16 +159,16 @@ std::cout << "hasFP64 " << hasFP64 << std::endl;
 	objsMem = cl::Buffer(clCommon->context, CL_MEM_READ_WRITE, sizeof(Object) * count);
 	objsMemPrev = cl::Buffer(clCommon->context, CL_MEM_READ_WRITE, sizeof(Object) * count);
 	
+	std::stringstream ss;
+	ss	
+		<< (hasGLSharing ? "#pragma OPENCL EXTENSION cl_khr_gl_sharing : enable\n" : "")
+		<< (hasFP64 ? "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n" : "")
+		<< "#define USE_GL_SHARING " << (hasGLSharing ? "1" : "0") << "\n"
+		<< "#define COUNT " << count << "\n"
+		<< "#define INITIAL_RADIUS 50000\n"	//radius of the milky way, in light years
+		<< "#include \"nbody.cl\"\n";
+	std::string source = ss.str();
 	try {
-		std::stringstream ss;
-		ss	
-			<< (hasGLSharing ? "#pragma OPENCL EXTENSION cl_khr_gl_sharing : enable\n" : "")
-			<< (hasFP64 ? "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n" : "")
-			<< "#define USE_GL_SHARING " << (hasGLSharing ? "1" : "0") << "\n"
-			<< "#define COUNT " << count << "\n"
-			<< "#define INITIAL_RADIUS 50000\n"	//radius of the milky way, in light years
-			<< "#include \"nbody.cl\"\n";
-		std::string source = ss.str();
 #if defined(CL_HPP_TARGET_OPENCL_VERSION) && CL_HPP_TARGET_OPENCL_VERSION>=200
 		program = cl::Program(clCommon->context, std::vector<std::string>{source});
 #else
@@ -179,6 +179,7 @@ std::cout << "hasFP64 " << hasFP64 << std::endl;
 #endif	//CL_HPP_TARGET_OPENCL_VERSION
 		program.build({clCommon->device}, "-I include");
 	} catch (cl::Error &err) {
+		std::cout << source << std::endl;
 		std::cout << "failed to build program executable!" << std::endl;
 		std::cout << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(clCommon->device) << std::endl;
 		throw;
@@ -299,17 +300,19 @@ PROFILE_BEGIN_FRAME()
 	}
 
 	//update CL state
-//WHY IS THIS CRASHING?
 	updateKernel.setArg(0, objsMemPrev);	//write new state over old state
 	updateKernel.setArg(1, objsMem);
 	clCommon->commands.enqueueNDRangeKernel(updateKernel, cl::NDRange(0), globalSize, localSize);
 	
-	std::swap<cl::Memory>(objsMem, objsMemPrev);
-	/*{
+#ifdef PLATFORM_msvc
+	{
 		cl::Buffer tmp = objsMem;
 		objsMem = objsMemPrev;
 		objsMemPrev = tmp;
-	}*/
+	}
+#else
+	std::swap<cl::Memory>(objsMem, objsMemPrev);
+#endif
 
 #if 0
 	//render to framebuffer
