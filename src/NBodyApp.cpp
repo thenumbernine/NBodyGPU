@@ -22,7 +22,7 @@
 #endif
 
 struct NBodyApp : public ::GLApp::GLApp {
-	typedef ::GLApp::GLApp Super;
+	using Super = ::GLApp::GLApp;
 
 	std::shared_ptr<CLCommon::CLCommon> clCommon;
 	
