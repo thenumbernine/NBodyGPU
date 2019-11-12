@@ -1,25 +1,27 @@
+#include "GLApp/gl.h"
 #include "CLCommon/CLCommon.h"
+#include "CLCommon/cl.hpp"
 #include "GLApp/GLApp.h"
-#include "Tensor/Vector.h"
+#include "Shader/Program.h"
 #include "Profiler/Profiler.h"
+#include "Tensor/Vector.h"
+#include "Tensor/Quat.h"
 #include "Common/Macros.h"
 #include "Common/File.h"
 #include "Common/Exception.h"
-#include "Shader/Program.h"
-#include "CLCommon/cl.hpp"
-#include "Common/gl.h"
 #include <vector>
 #include <string>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
 #include "nbody.h"
-#include "Quat.h"
 
 //stupid windows
 #ifndef min
 #define min std::min
 #endif
+
+using Quat = Tensor::Quat<float>;
 
 struct NBodyApp : public ::GLApp::GLApp {
 	using Super = ::GLApp::GLApp;
@@ -54,7 +56,6 @@ struct NBodyApp : public ::GLApp::GLApp {
 	cl::NDRange localSize;
 
 	Tensor::Vector<int,2> screenBufferSize;
-	Tensor::Vector<int,2> viewportSize;
 	Quat viewAngle;
 	float dist;
 	bool leftShiftDown;
@@ -67,7 +68,6 @@ struct NBodyApp : public ::GLApp::GLApp {
 	virtual void init();
 	virtual void shutdown();
 	virtual void update();
-	virtual void resize(int width, int height);
 	virtual void sdlEvent(SDL_Event &event);
 };
 
@@ -329,7 +329,6 @@ PROFILE_BEGIN_FRAME()
 	
 	const float zNear = .01;
 	const float zFar = 10;
-	float aspectRatio = (float)viewportSize(0) / (float)viewportSize(1);
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
 	glFrustum(-aspectRatio * zNear, aspectRatio * zNear, -zNear, zNear, zNear, zFar);
@@ -374,7 +373,7 @@ PROFILE_BEGIN_FRAME()
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 	//render to screen
-	glViewport(0, 0, viewportSize(0), viewportSize(1));
+	glViewport(0, 0, screenSize(0), screenSize(1));
 	glClear(GL_COLOR_BUFFER_BIT);
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
@@ -410,12 +409,6 @@ PROFILE_BEGIN_FRAME()
 PROFILE_END_FRAME()
 }
 
-void NBodyApp::resize(int width, int height) {
-	Super::resize(width, height);
-	viewportSize(0) = width;
-	viewportSize(1) = height;
-}
-	
 void NBodyApp::sdlEvent(SDL_Event &event) {
 	bool shiftDown = leftShiftDown || rightShiftDown;
 
