@@ -1,6 +1,7 @@
 #include "GLApp/gl.h"
 #include "CLCommon/CLCommon.h"
 #include "CLCommon/cl.hpp"
+#include "GLApp/ViewBehavior.h"
 #include "GLApp/GLApp.h"
 #include "Shader/Program.h"
 #include "Profiler/Profiler.h"
@@ -23,18 +24,19 @@
 
 using Quat = Tensor::Quat<float>;
 
-struct NBodyApp : public ::GLApp::GLApp {
-	using Super = ::GLApp::GLApp;
+struct NBodyApp : public ::GLApp::ViewBehavior<::GLApp::GLApp> {
+	using Super = ::GLApp::ViewBehavior<::GLApp::GLApp>;
 
 	std::shared_ptr<CLCommon::CLCommon> clCommon;
 	
-	bool hasGLSharing, hasFP64;
+	bool hasGLSharing = {};
+	bool hasFP64 = {};
 
-	GLuint positionVBO;	//position vertex buffer object -- for rendering
-	GLuint postTex;		//post-processing texture
-	GLuint gradientTex;	//gradient texture
-	GLuint particleTex;	//particle texture
-	GLuint fbo;
+	GLuint positionVBO = {};	//position vertex buffer object -- for rendering
+	GLuint postTex = {};		//post-processing texture
+	GLuint gradientTex = {};	//gradient texture
+	GLuint particleTex = {};	//particle texture
+	GLuint fbo = {};
 
 	//with GL sharing
 	cl::Memory posMem;
@@ -50,44 +52,27 @@ struct NBodyApp : public ::GLApp::GLApp {
 
 	Shader::Program particleShader;
 
-	int count;
+	int count = 16384;
 
 	cl::NDRange globalSize;
 	cl::NDRange localSize;
 
-	Tensor::Vector<int,2> screenBufferSize;
+	Tensor::Vector<int,2> screenBufferSize = Tensor::Vector<int,2>(1024, 1024);
 	Quat viewAngle;
-	float dist;
-	bool leftShiftDown;
-	bool rightShiftDown;
-	bool leftButtonDown;
-	bool rightButtonDown;
+	float dist = 1;
+	bool leftShiftDown = {};
+	bool rightShiftDown = {};
+	bool leftButtonDown = {};
+	bool rightButtonDown = {};
 
-	NBodyApp();
+	virtual const char* getTitle() { return "N-Body GPU"; }
 
-	virtual void init();
-	virtual void shutdown();
-	virtual void update();
-	virtual void sdlEvent(SDL_Event &event);
+	virtual void init(const Init& args);
+	~NBodyApp();
+
+	virtual void onUpdate();
+	virtual void onSDLEvent(SDL_Event &event);
 };
-
-NBodyApp::NBodyApp()
-: Super()
-, hasGLSharing(false)
-, hasFP64(false)
-, positionVBO(0)
-, postTex(0)
-, gradientTex(0)
-, particleTex(0)
-, fbo(0)
-, count(16384)
-, screenBufferSize(1024, 1024)
-, dist(1.f)
-, leftShiftDown(false)
-, rightShiftDown(false)
-, leftButtonDown(false)
-, rightButtonDown(false)
-{}
 
 //TODO put this in CLCommon, where a similar function operating on vectors exists
 static auto checkHasGLSharing = [](const cl::Device& device)-> bool {
@@ -101,8 +86,8 @@ static auto checkHasFP64 = [](const cl::Device& device)-> bool {
 	return std::find(extensions.begin(), extensions.end(), "cl_khr_fp64") != extensions.end();
 };
 
-void NBodyApp::init() {
-	Super::init();
+void NBodyApp::init(const Init& args) {
+	Super::init(args);
 
 	clCommon = std::make_shared<CLCommon::CLCommon>(
 		/*useGPU=*/true,	
@@ -261,7 +246,7 @@ std::cout << "hasFP64 " << hasFP64 << std::endl;
 	if (err) throw Common::Exception() << "GL error " << err;
 }
 
-void NBodyApp::shutdown() {
+NBodyApp::~NBodyApp() {
 #if 0
 	glDeleteFramebuffers(1, &fbo);
 #endif
@@ -271,7 +256,7 @@ void NBodyApp::shutdown() {
 	glDeleteBuffers(1, &positionVBO);
 }
 
-void NBodyApp::update() {
+void NBodyApp::onUpdate() {
 PROFILE_BEGIN_FRAME()
 	copyToGLKernel.setArg(1, objsMem);
 	if (hasGLSharing) {
@@ -409,7 +394,7 @@ PROFILE_BEGIN_FRAME()
 PROFILE_END_FRAME()
 }
 
-void NBodyApp::sdlEvent(SDL_Event &event) {
+void NBodyApp::onSDLEvent(SDL_Event &event) {
 	bool shiftDown = leftShiftDown || rightShiftDown;
 
 	switch (event.type) {
