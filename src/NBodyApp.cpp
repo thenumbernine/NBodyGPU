@@ -289,7 +289,7 @@ PROFILE_BEGIN_FRAME()
 	updateKernel.setArg(1, objsMem);
 	clCommon->commands.enqueueNDRangeKernel(updateKernel, cl::NDRange(0), globalSize, localSize);
 	
-#ifdef PLATFORM_msvc
+#if PLATFORM_MSVC
 	{
 		cl::Buffer tmp = objsMem;
 		objsMem = objsMemPrev;
