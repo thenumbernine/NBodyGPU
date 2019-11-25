@@ -413,8 +413,7 @@ void NBodyApp::onSDLEvent(SDL_Event &event) {
 						float fdx = (float)dx / magn;
 						float fdy = (float)dy / magn;
 						Quat rotation = Quat(fdy, fdx, 0, magn * M_PI / 180.).fromAngleAxis();
-						viewAngle = rotation * viewAngle;
-						viewAngle /= Quat::length(viewAngle);
+						viewAngle = (rotation * viewAngle).unit();
 					}
 				}
 			}
