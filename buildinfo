@@ -6,6 +6,6 @@ depends:append{
 	'../CLCommon',
 	'../Tensor',
 	'../Profiler',
-	'../Shader',
+	'../GLCxx',
 }
 include:insert'res/include'

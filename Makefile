@@ -7,7 +7,7 @@ include ../GLApp/Include.mk
 include ../CLCommon/Include.mk
 include ../Tensor/Include.mk
 include ../Profiler/Include.mk
-include ../Shader/Include.mk
+include ../GLCxx/Include.mk
 
 INCLUDE+=res/include
 

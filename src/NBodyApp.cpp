@@ -1,9 +1,9 @@
-#include "GLApp/gl.h"
 #include "CLCommon/CLCommon.h"
 #include "CLCommon/cl.hpp"
 #include "GLApp/ViewBehavior.h"
 #include "GLApp/GLApp.h"
-#include "Shader/Program.h"
+#include "GLCxx/Program.h"
+#include "GLCxx/gl.h"
 #include "Profiler/Profiler.h"
 #include "Tensor/Vector.h"
 #include "Tensor/Quat.h"
@@ -50,7 +50,7 @@ struct NBodyApp : public ::GLApp::ViewBehavior<::GLApp::GLApp> {
 	cl::Kernel copyToGLKernel;
 	cl::Kernel initDataKernel;
 
-	Shader::Program particleShader;
+	GLCxx::Program particleShader;
 
 	int count = 16384;
 
@@ -234,11 +234,11 @@ std::cout << "hasFP64 " << hasFP64 << std::endl;
 #endif
 
 	std::string particleShaderSource = Common::File::read("particle.shader");
-	std::vector<Shader::Shader> shaders = {
-		Shader::VertexShader(std::vector<std::string>{"#define VERTEX_SHADER\n", particleShaderSource}),
-		Shader::FragmentShader(std::vector<std::string>{"#define FRAGMENT_SHADER\n", particleShaderSource}),
+	std::vector<GLCxx::Shader> shaders = {
+		GLCxx::VertexShader(std::vector<std::string>{"#define VERTEX_SHADER\n", particleShaderSource}),
+		GLCxx::FragmentShader(std::vector<std::string>{"#define FRAGMENT_SHADER\n", particleShaderSource}),
 	};
-	particleShader = Shader::Program(shaders)
+	particleShader = GLCxx::Program(shaders)
 		.setUniform<int>("tex", 0)
 		.done();
 	
