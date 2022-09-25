@@ -3,6 +3,7 @@
 #include "GLApp/ViewBehavior.h"
 #include "GLApp/GLApp.h"
 #include "GLCxx/Program.h"
+#include "GLCxx/Texture.h"
 #include "GLCxx/gl.h"
 #include "Profiler/Profiler.h"
 #include "Tensor/Vector.h"
@@ -32,10 +33,10 @@ struct NBodyApp : public ::GLApp::ViewBehavior<::GLApp::GLApp> {
 	bool hasGLSharing = {};
 	bool hasFP64 = {};
 
-	GLuint positionVBO = {};	//position vertex buffer object -- for rendering
-	GLuint postTex = {};		//post-processing texture
-	GLuint gradientTex = {};	//gradient texture
-	GLuint particleTex = {};	//particle texture
+	GLuint positionVBO = {};			//position vertex buffer object -- for rendering
+	GLCxx::Texture postTex;				//post-processing texture
+	GLCxx::Texture gradientTex = {};	//gradient texture
+	GLCxx::Texture particleTex = {};	//particle texture
 	GLuint fbo = {};
 
 	//with GL sharing
@@ -57,7 +58,7 @@ struct NBodyApp : public ::GLApp::ViewBehavior<::GLApp::GLApp> {
 	cl::NDRange globalSize;
 	cl::NDRange localSize;
 
-	Tensor::Vector<int,2> screenBufferSize = Tensor::Vector<int,2>(1024, 1024);
+	Tensor::int2 screenBufferSize = {1024, 1024};
 	Quat viewAngle;
 	float dist = 1;
 	bool leftShiftDown = {};
@@ -188,17 +189,14 @@ std::cout << "hasFP64 " << hasFP64 << std::endl;
 		copyToGLKernel.setArg(0, posMem);
 	}
 
-	glGenTextures(1, &postTex);
-	glBindTexture(GL_TEXTURE_2D, postTex);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenBufferSize(0), screenBufferSize(1), 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	postTex = GLCxx::Texture2D()
+		.bind()
+		.setParam<GL_TEXTURE_MIN_FILTER>(GL_LINEAR)
+		.setParam<GL_TEXTURE_MAG_FILTER>(GL_LINEAR)
+		.create2D(screenBufferSize(0), screenBufferSize(1), GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE)
+		.unbind();
 	
-	glGenTextures(1, &particleTex);
-	glBindTexture(GL_TEXTURE_2D, particleTex);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	Tensor::Vector<int,2> particleTexSize(256, 256);
+	Tensor::int2 particleTexSize(256, 256);
 	std::vector<char> particleData(particleTexSize(0) * particleTexSize(1) * 4);
 	{
 		char *p = &particleData[0];
@@ -215,17 +213,21 @@ std::cout << "hasFP64 " << hasFP64 << std::endl;
 			}
 		}
 	}
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, particleTexSize(0), particleTexSize(1), 0, GL_RGBA, GL_UNSIGNED_BYTE, &particleData[0]);
-	glGenerateMipmap(GL_TEXTURE_2D);
+	particleTex = GLCxx::Texture2D()
+		.bind()
+		.setParam<GL_TEXTURE_MIN_FILTER>(GL_LINEAR)
+		.setParam<GL_TEXTURE_MAG_FILTER>(GL_LINEAR)
+		.create2D(particleTexSize(0), particleTexSize(1), GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, particleData.data())
+		.generateMipmap()
+		.unbind();
 
-	glGenTextures(1, &gradientTex);
-	glBindTexture(GL_TEXTURE_2D, gradientTex);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	int gradientSize = 1024;
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, gradientSize, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-
-	glBindTexture(GL_TEXTURE_2D, 0);
+	gradientTex = GLCxx::Texture2D()
+		.bind()
+		.setParam<GL_TEXTURE_MIN_FILTER>(GL_NEAREST)
+		.setParam<GL_TEXTURE_MAG_FILTER>(GL_LINEAR)
+		.create2D(gradientSize, 1, GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE)
+		.unbind();
 
 #if 0
 	glGenFramebuffers(1, &fbo);
@@ -250,10 +252,6 @@ NBodyApp::~NBodyApp() {
 #if 0
 	glDeleteFramebuffers(1, &fbo);
 #endif
-	glDeleteTextures(1, &postTex);
-	glDeleteTextures(1, &gradientTex);
-	glDeleteTextures(1, &particleTex);
-	glDeleteBuffers(1, &positionVBO);
 }
 
 void NBodyApp::onUpdate() {
@@ -303,7 +301,7 @@ PROFILE_BEGIN_FRAME()
 	//render to framebuffer
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 	
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, postTex, 0);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, postTex(), 0);
 	int status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if (status != GL_FRAMEBUFFER_COMPLETE) throw Common::Exception() << "check framebuffer status " << status;
 
@@ -327,13 +325,13 @@ PROFILE_BEGIN_FRAME()
 	glPointSize(20.f);
 	glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, Tensor::Vector<float,3>(0.f, 1.f, 0.f).v);
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, Tensor::float3(0.f, 1.f, 0.f).v);
 	glPointParameterf(GL_POINT_SIZE_MIN, 1.f);
 	glPointParameterf(GL_POINT_SIZE_MAX, 128.f);
 
 	glEnable(GL_POINT_SMOOTH);
 	glEnable(GL_BLEND);
-	glBindTexture(GL_TEXTURE_2D, particleTex);
+	particleTex.bind();
 	glEnable(GL_POINT_SPRITE);
 	glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);
 	glTexEnvi(GL_POINT_SPRITE, GL_COORD_REPLACE, GL_TRUE);
@@ -351,9 +349,10 @@ PROFILE_BEGIN_FRAME()
 	glDisable(GL_VERTEX_PROGRAM_POINT_SIZE);
 	glDisable(GL_POINT_SPRITE);
 
-	glBindTexture(GL_TEXTURE_2D, postTex);
-	glGenerateMipmap(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, 0);
+	postTex
+		.bind()
+		.generateMipmap()
+		.unbind();
 #if 0
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -366,9 +365,7 @@ PROFILE_BEGIN_FRAME()
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	
-	glEnable(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, postTex);
-	glGenerateMipmap(GL_TEXTURE_2D);
+	postTex.enable().bind().generateMipmap();
 #if 0
 	//first layer...
 	glBegin(GL_QUADS);
@@ -388,8 +385,7 @@ PROFILE_BEGIN_FRAME()
 	glEnd();
 	glTexEnvf(GL_TEXTURE_FILTER_CONTROL, GL_TEXTURE_LOD_BIAS, 0.f);
 
-	glDisable(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, 0);
+	postTex.unbind().disable();
 #endif
 PROFILE_END_FRAME()
 }
