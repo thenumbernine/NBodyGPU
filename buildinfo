@@ -3,9 +3,10 @@ distType='app'
 depends:append{
 	'../Common',
 	'../GLApp',
+	'../SDLApp',
+	'../GLCxx',
 	'../CLCommon',
 	'../Tensor',
 	'../Profiler',
-	'../GLCxx',
 }
 include:insert'res/include'

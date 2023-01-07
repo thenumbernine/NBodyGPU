@@ -23,7 +23,7 @@
 #define min std::min
 #endif
 
-using Quat = Tensor::Quat<float>;
+using Quat = Tensor::_quat<float>;
 
 struct NBodyApp : public ::GLApp::ViewBehavior<::GLApp::GLApp> {
 	using Super = ::GLApp::ViewBehavior<::GLApp::GLApp>;
@@ -66,7 +66,7 @@ struct NBodyApp : public ::GLApp::ViewBehavior<::GLApp::GLApp> {
 	bool leftButtonDown = {};
 	bool rightButtonDown = {};
 
-	virtual const char* getTitle() { return "N-Body GPU"; }
+	virtual std::string getTitle() { return "N-Body GPU"; }
 
 	virtual void init(const Init& args);
 	~NBodyApp();
@@ -325,7 +325,7 @@ PROFILE_BEGIN_FRAME()
 	glPointSize(20.f);
 	glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, Tensor::float3(0.f, 1.f, 0.f).v);
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, Tensor::float3(0.f, 1.f, 0.f).s.data());
 	glPointParameterf(GL_POINT_SIZE_MIN, 1.f);
 	glPointParameterf(GL_POINT_SIZE_MAX, 128.f);
 
@@ -409,7 +409,7 @@ void NBodyApp::onSDLEvent(SDL_Event &event) {
 						float fdx = (float)dx / magn;
 						float fdy = (float)dy / magn;
 						Quat rotation = Quat(fdy, fdx, 0, magn * M_PI / 180.).fromAngleAxis();
-						viewAngle = (rotation * viewAngle).unit();
+						viewAngle = (rotation * viewAngle).normalize();
 					}
 				}
 			}
