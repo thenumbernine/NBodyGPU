@@ -23,7 +23,7 @@
 #define min std::min
 #endif
 
-using Quat = Tensor::_quat<float>;
+using Quat = Tensor::quat<float>;
 
 struct NBodyApp : public ::GLApp::ViewBehavior<::GLApp::GLApp> {
 	using Super = ::GLApp::ViewBehavior<::GLApp::GLApp>;
